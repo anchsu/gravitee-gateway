@@ -207,3 +207,11 @@ ds:
 #  api-key:
 #    header: X-Gravitee-Api-Key
 #    param: api-key
+
+# Gateway alert (for users who takes support with GraviteeSource only)
+alerts:
+  vertx:
+    enabled: false
+    hazelcast:
+      config:
+        path: ${gravitee.home}/config/hazelcast.xml

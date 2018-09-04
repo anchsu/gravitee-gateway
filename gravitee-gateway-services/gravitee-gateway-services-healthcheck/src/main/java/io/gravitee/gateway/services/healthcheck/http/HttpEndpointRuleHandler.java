@@ -15,6 +15,7 @@
  */
 package io.gravitee.gateway.services.healthcheck.http;
 
+import io.gravitee.alert.api.event.Event;
 import io.gravitee.common.http.HttpHeaders;
 import io.gravitee.common.http.HttpStatusCode;
 import io.gravitee.definition.model.HttpClientSslOptions;
@@ -25,6 +26,7 @@ import io.gravitee.gateway.services.healthcheck.EndpointStatusDecorator;
 import io.gravitee.gateway.services.healthcheck.eval.EvaluationException;
 import io.gravitee.gateway.services.healthcheck.eval.assertion.AssertionEvaluation;
 import io.gravitee.gateway.services.healthcheck.http.el.EvaluableHttpResponse;
+import io.gravitee.plugin.alert.AlertService;
 import io.gravitee.reporter.api.common.Request;
 import io.gravitee.reporter.api.common.Response;
 import io.gravitee.reporter.api.health.EndpointStatus;
@@ -42,11 +44,15 @@ import io.vertx.core.net.ProxyType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.net.InetAddress;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.net.UnknownHostException;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.regex.Pattern;
+
+import static java.lang.System.currentTimeMillis;
 
 /**
  * @author David BRASSELY (david.brassely at graviteesource.com)
@@ -59,16 +65,14 @@ public class HttpEndpointRuleHandler implements Handler<Long> {
 
     // Pattern reuse for duplicate slash removal
     private static final Pattern DUPLICATE_SLASH_REMOVER = Pattern.compile("(?<!(http:|https:))[//]+");
-
     private static final String HTTPS_SCHEME = "https";
 
     private final EndpointRule rule;
-
     private final Vertx vertx;
-
     private final EndpointStatusDecorator endpointStatus;
-
     private Handler<EndpointStatus> statusHandler;
+
+    private AlertService alertService;
 
     public HttpEndpointRuleHandler(Vertx vertx, EndpointRule rule) {
         this.vertx = vertx;
@@ -209,16 +213,16 @@ public class HttpEndpointRuleHandler implements Handler<Long> {
 
                 final EndpointStatus.Builder healthBuilder = EndpointStatus
                         .forEndpoint(rule.api(), endpoint.getName())
-                        .on(System.currentTimeMillis());
+                        .on(currentTimeMillis());
 
-                long startTime = System.currentTimeMillis();
+                long startTime = currentTimeMillis();
 
                 Request request = new Request();
                 request.setMethod(step.getRequest().getMethod());
                 request.setUri(hcRequestUri.toString());
 
                 healthRequest.handler(response -> response.bodyHandler(buffer -> {
-                    long endTime = System.currentTimeMillis();
+                    long endTime = currentTimeMillis();
                     logger.debug("Health-check endpoint returns a response with a {} status code", response.statusCode());
 
                     String body = buffer.toString();
@@ -262,7 +266,7 @@ public class HttpEndpointRuleHandler implements Handler<Long> {
                 }));
 
                 healthRequest.exceptionHandler(event -> {
-                    long endTime = System.currentTimeMillis();
+                    long endTime = currentTimeMillis();
 
                     EndpointStatus.StepBuilder stepBuilder = EndpointStatus.forStep(step.getName());
                     stepBuilder.fail(event.getMessage());
@@ -318,16 +322,40 @@ public class HttpEndpointRuleHandler implements Handler<Long> {
 
     private void report(final EndpointStatus endpointStatus) {
         final int previousStatusCode = rule.endpoint().getStatus().code();
+        final String previousStatusName = rule.endpoint().getStatus().name();
         this.endpointStatus.updateStatus(endpointStatus.isSuccess());
         endpointStatus.setState(rule.endpoint().getStatus().code());
         endpointStatus.setAvailable(!rule.endpoint().getStatus().isDown());
         endpointStatus.setResponseTime((long) endpointStatus.getSteps().stream().mapToLong(Step::getResponseTime).average().getAsDouble());
-        endpointStatus.setTransition(previousStatusCode != rule.endpoint().getStatus().code());
+        final boolean transition = previousStatusCode != rule.endpoint().getStatus().code();
+        endpointStatus.setTransition(transition);
+
+        if (transition && alertService != null) {
+            String hostName = "unknown";
+            try {
+                hostName = InetAddress.getLocalHost().getHostName();
+            } catch (final UnknownHostException uhe) {
+                logger.warn("Could not get hostname", uhe);
+            }
+            alertService.send(new Event.Builder()
+                    .timestamp(currentTimeMillis())
+                    .context(hostName)
+                    .type("HC")
+                    .property("api", endpointStatus.getApi())
+                    .property("endpoint", endpointStatus.getEndpoint())
+                    .property("old_status", previousStatusName)
+                    .property("new_status", rule.endpoint().getStatus().name())
+                    .build());
+        }
 
         statusHandler.handle(endpointStatus);
     }
 
     public void setStatusHandler(Handler<EndpointStatus> statusHandler) {
         this.statusHandler = statusHandler;
+    }
+
+    public void setAlertService(AlertService alertService) {
+        this.alertService = alertService;
     }
 }
