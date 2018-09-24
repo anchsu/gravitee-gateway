@@ -38,10 +38,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 
 import javax.annotation.Resource;
-import java.net.ConnectException;
-import java.net.NoRouteToHostException;
-import java.net.URI;
-import java.net.UnknownHostException;
+import java.net.*;
 import java.util.*;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Function;
@@ -82,6 +79,7 @@ public class VertxHttpClient extends AbstractLifecycleComponent<Connector> imple
     private final HttpEndpoint endpoint;
 
     private HttpClientOptions httpClientOptions;
+    private String hostHeader;
 
     @Autowired
     public VertxHttpClient(HttpEndpoint endpoint) {
@@ -99,25 +97,16 @@ public class VertxHttpClient extends AbstractLifecycleComponent<Connector> imple
             proxyRequest.headers().remove(header);
         }
 
+        // Set host header according to endpoint configuration
+        proxyRequest.headers().set(HttpHeaders.HOST, hostHeader);
+
         final URI uri = proxyRequest.uri();
-        final int port = uri.getPort() != -1 ? uri.getPort() :
-                (HTTPS_SCHEME.equals(uri.getScheme()) ? 443 : 80);
-
-        // Override with default headers defined for endpoint
-        if (endpoint.getHostHeader() != null && !endpoint.getHostHeader().isEmpty()) {
-            proxyRequest.headers().set(HttpHeaders.HOST, endpoint.getHostHeader());
-        } else {
-            final String host = (port == DEFAULT_HTTP_PORT || port == DEFAULT_HTTPS_PORT) ?
-                    uri.getHost() : uri.getHost() + ':' + port;
-
-            proxyRequest.headers().set(HttpHeaders.HOST, host);
-        }
 
         String relativeUri = (uri.getRawQuery() == null) ? uri.getRawPath() : uri.getRawPath() + '?' + uri.getRawQuery();
 
         // Prepare request
         HttpClientRequest clientRequest = httpClient.request(
-                convert(proxyRequest.method()), port, uri.getHost(), relativeUri);
+                convert(proxyRequest.method()), relativeUri);
         clientRequest.setTimeout(endpoint.getHttpClientOptions().getReadTimeout());
         clientRequest.setFollowRedirects(endpoint.getHttpClientOptions().isFollowRedirects());
 
@@ -206,9 +195,23 @@ public class VertxHttpClient extends AbstractLifecycleComponent<Connector> imple
 
     @Override
     protected void doStart() throws Exception {
-        // TODO: Prepare HttpClientOptions according to the endpoint to improve performance when creating a new
-        // instance of the Vertx client
         httpClientOptions = new HttpClientOptions();
+
+        URL endpointTarget = new URL(endpoint.getTarget());
+
+        final int port = endpointTarget.getPort() != -1 ? endpointTarget.getPort() :
+                (HTTPS_SCHEME.equals(endpointTarget.getProtocol()) ? DEFAULT_HTTPS_PORT : DEFAULT_HTTP_PORT);
+
+        httpClientOptions.setDefaultPort(port);
+        httpClientOptions.setDefaultHost(endpointTarget.getHost());
+
+        // Override with default headers defined for endpoint
+        if (endpoint.getHostHeader() != null && !endpoint.getHostHeader().isEmpty()) {
+            hostHeader = endpoint.getHostHeader();
+        } else {
+            hostHeader = (port == DEFAULT_HTTP_PORT || port == DEFAULT_HTTPS_PORT) ?
+                    endpointTarget.getHost() : endpointTarget.getHost() + ':' + port;
+        }
 
         httpClientOptions.setPipelining(endpoint.getHttpClientOptions().isPipelining());
         httpClientOptions.setKeepAlive(endpoint.getHttpClientOptions().isKeepAlive());

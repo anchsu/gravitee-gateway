@@ -64,7 +64,7 @@ public class TargetEndpointResolverTest {
     }
 
     @Test
-    public void shouldResolveUserDefinedEndpoint_selectFirstEndpoint() {
+    public void shouldNotResolveUserDefinedEndpoint_noMatchingEndpointcall_dynamic_api() {
         final String targetUri = "http://host:8080/test";
 
         when(executionContext.getAttribute(ExecutionContext.ATTR_REQUEST_ENDPOINT)).thenReturn(targetUri);
@@ -78,8 +78,7 @@ public class TargetEndpointResolverTest {
                 .thenAnswer(invocation -> Collections.singleton(new EndpointReference(endpoint)));
 
         EndpointResolver.ResolvedEndpoint resolvedEndpoint = resolver.resolve(serverRequest, executionContext);
-
-        Assert.assertEquals(targetUri, resolvedEndpoint.getUri());
+        Assert.assertNull(resolvedEndpoint);
     }
 
     @Test

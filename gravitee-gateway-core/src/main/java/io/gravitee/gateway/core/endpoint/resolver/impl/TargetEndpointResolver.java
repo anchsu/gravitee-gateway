@@ -120,15 +120,18 @@ public class TargetEndpointResolver implements EndpointResolver {
 
                 return createEndpoint(endpoint, encodedTarget.replaceFirst(sRef + ':', endpoint.target()));
             } else {
+                // https://github.com/gravitee-io/issues/issues/1515
+                // When the user selected endpoint which is not defined, the gateway returns an invalid endpoint
+                // reference and ends with a 503 service unavailable status code.
                 // Try to match an endpoint according to the target URL
                 Collection<Reference> endpoints = referenceRegister.referencesByType(EndpointReference.class);
                 Reference reference = endpoints
                         .stream()
                         .filter(endpointEntry -> encodedTarget.startsWith(endpointEntry.endpoint().target()))
                         .findFirst()
-                        .orElse(endpoints.iterator().next());
+                        .orElse(null);
 
-                return createEndpoint(reference.endpoint(), encodedTarget);
+                return (reference != null) ? createEndpoint(reference.endpoint(), encodedTarget) : null;
             }
         }
     }
